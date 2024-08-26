@@ -3,6 +3,7 @@
 import base64
 import importlib
 import importlib.util
+from abc import ABC, abstractmethod
 from io import BytesIO
 from typing import Any, Callable
 
@@ -16,7 +17,16 @@ PILImage = (
 )
 
 
-class Video:
+class MediaType(ABC):
+    """Abstract class to represent a media type."""
+
+    @abstractmethod
+    def process(self) -> list[str] | tuple[str, str]:
+        """Process the media type."""
+        ...
+
+
+class Video(MediaType):
     """Class to represent a video."""
 
     def __init__(self, file_path: str, seconds_per_frame: int = 2) -> None:
@@ -64,7 +74,7 @@ class Video:
         return base64_frames
 
 
-class Image:
+class Image(MediaType):
     """Class to represent an image."""
 
     def __init__(self, file_path: str) -> None:
@@ -146,6 +156,76 @@ class TypeExplanation:
         return self._nested_types
 
 
+class MediaInformation(ABC):
+    """Abstract class for Media Information strategies."""
+
+    def __init__(self, value: MediaType) -> None:
+        """Initializes the MediaInformation stragegy."""
+        self.value = value
+
+    @abstractmethod
+    def inform(self, semstr: str, name: str) -> list[dict]:
+        """Inform the media information."""
+        ...
+
+
+class ImageInformation(MediaInformation):
+    """Class to represent the image information."""
+
+    def __init__(self, value: Image) -> None:
+        """Initializes the ImageInformation class."""
+        super().__init__(value)
+
+    def inform(self, semstr: str, name: str) -> list[dict]:
+        """Inform the image information."""
+        img_base64, img_type = self.value.process()
+        return [
+            {
+                "type": "text",
+                "text": f"{semstr if semstr else ''} ({name}) (Image) = ".strip(),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/{img_type};base64,{img_base64}"},
+            },
+        ]
+
+
+class VideoInformation(MediaInformation):
+    """Class to represent the video information."""
+
+    def __init__(self, value: Video) -> None:
+        """Initializes the VideoInformation class."""
+        super().__init__(value)
+
+    def inform(self, semstr: str, name: str) -> list[dict]:
+        """Inform the video information."""
+        video_frames = self.value.process()
+        return [
+            {
+                "type": "text",
+                "text": f"{semstr if semstr else ''} ({name}) (Video) = ".strip(),
+            },
+            *(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{frame}",
+                        "detail": "low",
+                    },
+                }
+                for frame in video_frames
+            ),
+        ]
+
+
+InformationContainer = {
+    """Information contrainer to reduce if statements in the future."""
+    "Image": ImageInformation,
+    "Video": VideoInformation,
+}
+
+
 class InputInformation:
     """Class to represent the input information."""
 
@@ -163,36 +243,11 @@ class InputInformation:
     def to_list_dict(self) -> list[dict]:
         """Returns the list of dictionaries representation of the InputInformation class."""
         input_type = get_type_annotation(self.value)
-        if input_type == "Image":
-            img_base64, img_type = self.value.process()
-            return [
-                {
-                    "type": "text",
-                    "text": f"{self.semstr if self.semstr else ''} ({self.name}) (Image) = ".strip(),
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/{img_type};base64,{img_base64}"},
-                },
-            ]
-        elif input_type == "Video":
-            video_frames = self.value.process()
-            return [
-                {
-                    "type": "text",
-                    "text": f"{self.semstr if self.semstr else ''} ({self.name}) (Video) = ".strip(),
-                },
-                *(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{frame}",
-                            "detail": "low",
-                        },
-                    }
-                    for frame in video_frames
-                ),
-            ]
+        if input_type in InformationContainer:
+            return InformationContainer[input_type](self.value).inform(
+                self.semstr, self.name
+            )
+
         return [
             {
                 "type": "text",
